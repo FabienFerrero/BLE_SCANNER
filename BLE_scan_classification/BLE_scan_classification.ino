@@ -19,7 +19,7 @@
         ESP_ERROR_CHECK( esp_pm_configure(&pm_config) );
     #endif
 
-int scanTime = 3; //In seconds
+int scanTime = 4; //In seconds
 BLEScan* pBLEScan;
 
 BLEAddress* id = (BLEAddress*)malloc(300); // array of BLEAddress detected
@@ -28,6 +28,7 @@ int8_t undet[300]; // counter of presence for the BLEAddress detected
 int rssi[300]; // last RSSI for the BLEAddress detected
 
 int id_num = 0; // number of BLE adress detected
+int nullscan = 2; // number of undetected BLE scan to remove a device from the list
 
 
 
@@ -54,7 +55,9 @@ void loop() {
   // put your main code here, to run repeatedly:
   BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
   
-  checklist(foundDevices);
+  checklist(foundDevices); // update the counters
+
+  process_list(); // clean the list with undetected device
   
   
   foundDevices.dump();
@@ -69,16 +72,20 @@ Serial.print(" RSSI: ");
 Serial.println(rssi[i]);
   }
   
-  Serial.println("Scan done!");
-  pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
+ pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
 
   Serial.print("Devices counter: ");
-  Serial.print(id_num);
+  Serial.println(id_num);
+  Serial.println("");
 
 
   counter();
   delay(10000);
 }
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 
 
 // Function check list
@@ -103,6 +110,7 @@ for (int i=0;i<count;i++){
         *(id + id_num) = foundDevices.getDevice(i).getAddress();
         cnt[id_num]=1; // increment the counter
         rssi[id_num]= foundDevices.getDevice(i).getRSSI();
+        undet[id_num]=0; // set undetect counter to 0
         Serial.printf("New Device detected: %x \n", *(id + id_num));               
         id_num++; //iterate the number of device detected        
     } 
@@ -116,5 +124,39 @@ void counter() {
   for (int i=0;i<id_num;i++){
     undet[i]++; // increment undet counter before new scan
   }
+}
 
+
+// Function counter
+// Update counter and BLE adress list
+ 
+void process_list() {
+  int j=0;
+  int i=0;
+  int num=id_num;
+  
+  while (j < num) {
+
+    if (undet[j] > nullscan) {
+       append_payload(j);
+       j++;
+       id_num=id_num-1;
+       Serial.printf("Remove Device : %x \n", *(id + j));
+    }
+    else{
+    *(id + i)=*(id + j);
+    cnt[i]=cnt[j];
+    undet[i]=undet[j];
+    j++;
+    i++;
+    }
+  }
+}
+
+// Function append_payload
+// Update payload with BLE address and duration
+ 
+void append_payload(int i) {
+
+  
 }
