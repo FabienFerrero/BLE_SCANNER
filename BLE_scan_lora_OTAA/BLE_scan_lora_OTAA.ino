@@ -3,6 +3,10 @@
    Ported to Arduino ESP32 by Evandro Copercini
 */
 
+#define PERIOD      50
+#define ID_array    300
+#define WL_array    1000
+
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
@@ -22,11 +26,7 @@
 // ESP32 C3 SERIAL1 (second UART)
 HardwareSerial mySerial1(1);
 
-
-// Fefine LoRaWan ABP credential
-String devAddr = "260B7039";
-String nwkkey = "A1B199EDB9A19216EB738B724BE98ECF";
-String apskey = "EE54EB30DC0F35653E06204DD5A86C92";
+// Fefine LoRaWan OTAA credential
 
 String devEUI = "70B3D57ED0061CBD";
 String appEUI = "0000000000000000";
@@ -40,16 +40,21 @@ int scanTime = 5; //In seconds
 BLEScan* pBLEScan;
 
 // Define arrays to store BLE ID and counter informations
-BLEAddress* id = (BLEAddress*)malloc(300 * sizeof(BLEAddress)); // array of BLEAddress detected
-BLEAddress* whitelist = (BLEAddress*)malloc(300 * sizeof(BLEAddress)); // array of BLEAddress detected
-int8_t cnt[300]; // counter of presence for the BLEAddress detected
-int8_t undet[300]; // counter of presence for the BLEAddress detected
+BLEAddress* id = (BLEAddress*)malloc(ID_array * sizeof(BLEAddress)); // array of BLEAddress detected
+BLEAddress* whitelist = (BLEAddress*)malloc(ID_array * sizeof(BLEAddress)); // array of BLEAddress detected
+
+
+int8_t cnt[ID_array]; // counter of presence for the BLEAddress detected
+int8_t undet[ID_array]; // counter of presence for the BLEAddress detected
+int8_t cntWL[WL_array]; // counter of presence for the BLEAddress detected
 int rssi[300]; // last RSSI for the BLEAddress detected
+
 
 uint8_t id_num = 0; // number of BLE adress currently detected and not removed
 uint8_t scan_num = 0; // number of BLE adress detected on the last scan
 uint8_t scan_new = 0; // number of new BLE adress detected on the last scan
-uint8_t scan_del = 0; // number of BLE adress deleted on the last scan
+uint8_t scan_del = 0; // number of BLE address deleted on the last scan
+int cnt_wl = 0; // number of BLE address in the white list
 
 int nullscan = 2; // number of undetected BLE scan to remove a device from the list
 
@@ -145,7 +150,16 @@ delay(100);
   sendLora();
   counter();
   
-  delay(50000);
+  // Sleep 50s
+  delay(PERIOD*1000);
+  
+//  gpio_deep_sleep_hold_en(); // hold GPIO 
+//  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUO_UART); // disable wake up source
+//  //esp_sleep_enable_timer_wakeup(); 
+//  esp_sleep_enable_timer_wakeup(10000000); // 50 sec
+
+
+  
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -169,22 +183,35 @@ for (int i=0;i<scan_num;i++){
         cnt[j]=cnt[j]+1; // increment the counter
         undet[j]=0; //reset undetect counter
         rssi[j]= foundDevices.getDevice(i).getRSSI();
-        }    
+        if(cnt[j]==100){
+          appendWL(j);
+           }
+        }
+            
       } //end for
     if(flag==0){ // The device do not exist, enter in the list
+       if (checkWL(i)){ // if device exist in white list
+        *(id + id_num) = foundDevices.getDevice(i).getAddress();
+        cnt[id_num]=1; // increment the counter
+        rssi[id_num]= foundDevices.getDevice(i).getRSSI();
+        undet[id_num]=0; // set undetect counter to 0             
+        id_num++; //iterate the number of device detected
+       }
+       else {
         *(id + id_num) = foundDevices.getDevice(i).getAddress();
         cnt[id_num]=1; // increment the counter
         rssi[id_num]= foundDevices.getDevice(i).getRSSI();
         undet[id_num]=0; // set undetect counter to 0
         Serial.printf("New Device detected: %x \n", *(id + id_num)); 
         scan_new++;              
-        id_num++; //iterate the number of device detected        
+        id_num++; //iterate the number of device detected
+       }        
     } 
   } // end for 
 }
 
 // Function counter
-// Update counter and BLE adress list
+// Update counter and BLE address list
  
 void counter() {
   for (int i=0;i<id_num;i++){
@@ -210,6 +237,7 @@ void process_list() {
 
     if (undet[j] > nullscan) {
        append_payload(j);
+       appendWL(j);
        j++;
        id_num=id_num-1;
        Serial.printf("Remove Device : %x \n", *(id + j));
@@ -232,7 +260,7 @@ void append_payload(int i) {
   
 }
 
-
+/////////////////////////////////////////////////////////
 
 void array_to_string(byte array[], unsigned int len, char buffer[])
 {
@@ -246,16 +274,19 @@ void array_to_string(byte array[], unsigned int len, char buffer[])
     buffer[len*2] = '\0';
 }
 
+/////////////////////////////////////
+
 void sendLora(){
 
-unsigned char mydata[4];
+unsigned char mydata[5];
 mydata[0] = (char) id_num; // actual counter
 mydata[1] = (char) scan_num; // last scan counter
 mydata[2] = (char) scan_new; // new device from last scan 
 mydata[3] = (char) scan_del; // deleted device from last scan
+mydata[4] = (char) cnt_wl; // white list counter
 
 char str[32] = "";
-array_to_string(mydata, 4, str);
+array_to_string(mydata, 5, str);
 Serial.println(str);
 
 mySerial1.printf("AT+SEND=3:");
@@ -271,6 +302,45 @@ mySerial1.println(str);
       Serial.write(mySerial1.read()); // read it and send it out Serial (USB)
   }
   delay(100);
-  Serial.println("AT set complete with downlink");
-  
+  Serial.println("AT set complete with downlink");  
 }
+
+//////////////////////////////////////
+
+void appendWL(int j){
+  int i=0;
+  while (i < cnt_wl) {
+    if (*(whitelist+i)==*(id + j)){
+      cntWL[i]=cntWL[i]+cnt[j];
+      i=9999;
+      }
+     else{
+      i++;
+      }  
+  }
+   if(i==cnt_wl){
+    *(whitelist+i) = *(id + j);
+    cntWL[i]=cnt[j];
+    cnt_wl++;
+   }
+}
+
+//////////////////////////////
+ boolean checkWL(int j) {
+  int i=0;
+  while (i < cnt_wl) {
+    if (*(whitelist+i)==*(id + j)){
+      cntWL[i]=cntWL[i]+cnt[j];
+      i=9999;
+      }
+     else{
+      i++;
+      }  
+  }
+  if(i==cnt_wl){
+    return false;    
+    }
+    else {
+      return true;
+      } 
+ }
